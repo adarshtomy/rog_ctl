@@ -1,53 +1,179 @@
 # rog_ctl
 
-A small Linux controller for the ASUS ROG Strix G513QE. It monitors the CPU
-and NVIDIA GPU temperatures and uses `asusctl` to show the hottest thermal
-state on the keyboard LEDs:
+Linux thermal controller for the **ASUS ROG Strix G513QE**.
 
-| State | Entry threshold | Exit threshold | LED color |
-| --- | ---: | ---: | --- |
-| Green | below 65°C | below 60°C from yellow | `00ff00` |
-| Yellow | 65°C | below 60°C | `ffff00` |
-| Red | 75°C | below 70°C | `ff0000` |
+`rog_ctl` monitors CPU and NVIDIA GPU temperatures, determines the thermal state using hysteresis, and controls the keyboard RGB through `asusctl`.
 
-The different entry and exit thresholds provide hysteresis, preventing the
-LED color from flickering when the temperature is close to a boundary. The
-controller polls once per second by default and only updates the LEDs when
-the thermal state changes.
+| State  |  Enter |   Exit | LED      |
+| ------ | -----: | -----: | -------- |
+| Green  | < 65°C |      — | `00ff00` |
+| Yellow | ≥ 65°C | < 60°C | `ffff00` |
+| Red    | ≥ 75°C | < 70°C | `ff0000` |
+
+The controller polls every second by default and only changes the LED when the thermal state changes.
+
+## Architecture
+
+```text
+Sensors
+  ├── CPU → /sys/class/hwmon (k10temp)
+  └── GPU → nvidia-smi
+          ↓
+   ThermalController
+   └── hysteresis state machine
+          ↓
+     LED Controller
+          ↓
+       asusctl
+          ↓
+     ROG keyboard
+```
+
+```text
+rog_ctl/
+├── main.py
+├── config.py
+├── thermal/
+│   ├── controller.py
+│   ├── test_state.py
+│   └── test_led.py
+├── asus_led/
+│   ├── controller.py
+│   └── test.py
+└── systemd/
+    └── rog-led.service
+```
 
 ## Requirements
 
-- Linux with readable `/sys/class/hwmon`
-- An AMD CPU exposing the `k10temp` hwmon device
-- An NVIDIA GPU with `nvidia-smi` available on `PATH`
-- `asusctl` installed and configured to control the keyboard LEDs
-- Python 3.9 or newer
+* Linux
+* AMD CPU with `k10temp`
+* NVIDIA GPU with `nvidia-smi`
+* `asusctl`
+* Python 3.9+
 
-This repository contains the Python controller only. The `asusctl` command is
-an external dependency; it is not installed by this project.
+`asusctl` is an external system dependency.
 
-## Run
+## Run manually
 
-From the repository root:
+From the project directory:
 
 ```bash
 python3 main.py
 ```
 
-Stop it with `SIGTERM`:
+Stop:
 
 ```bash
-kill -TERM <pid>
+kill -TERM <PID>
 ```
 
-On startup, the controller prints the configured thresholds. It continues
-polling after an individual sensor or LED operation fails and reports the
-error to standard output.
+## Run with systemd
+
+Install the service unit:
+
+```bash
+sudo cp systemd/rog-led.service /etc/systemd/system/
+sudo systemctl daemon-reload
+```
+
+Start:
+
+```bash
+sudo systemctl start rog-led
+```
+
+Enable at boot:
+
+```bash
+sudo systemctl enable rog-led
+```
+
+Enable and start together:
+
+```bash
+sudo systemctl enable --now rog-led
+```
+
+## Service control
+
+Check status:
+
+```bash
+systemctl status rog-led
+```
+
+Start:
+
+```bash
+sudo systemctl start rog-led
+```
+
+Stop:
+
+```bash
+sudo systemctl stop rog-led
+```
+
+Restart:
+
+```bash
+sudo systemctl restart rog-led
+```
+
+Disable automatic startup:
+
+```bash
+sudo systemctl disable rog-led
+```
+
+Check whether it is enabled:
+
+```bash
+systemctl is-enabled rog-led
+```
+
+Check whether it is running:
+
+```bash
+systemctl is-active rog-led
+```
+
+## Logs
+
+Show recent logs:
+
+```bash
+journalctl -u rog-led
+```
+
+Follow logs live:
+
+```bash
+journalctl -u rog-led -f
+```
+
+Show logs from the current boot:
+
+```bash
+journalctl -u rog-led -b
+```
+
+Show the last 50 lines:
+
+```bash
+journalctl -u rog-led -n 50
+```
 
 ## Configuration
 
-Edit [config.py](config.py) to change the polling interval, thermal
-thresholds, or RGB values:
+Thermal thresholds, polling interval, and LED colors are defined in:
+
+```text
+config.py
+```
+
+Example:
 
 ```python
 POLL_INTERVAL = 1.0
@@ -57,39 +183,27 @@ RED_ENTER = 75.0
 RED_EXIT = 70.0
 ```
 
-The color names in `COLORS` must match the thermal states used by
-`ThermalController`.
+## Diagnostics
 
-## Checks and diagnostics
-
-The repository does not currently use a test runner. The state-transition
-script is hardware-independent:
+Hardware-independent state-machine check:
 
 ```bash
 python3 -m thermal.test_state
 ```
 
-These scripts require the listed hardware and system commands:
+Hardware/sensor test:
 
 ```bash
-python3 thermal/test_led.py   # Read sensors and update the LED if needed
-python3 asus_led/test.py      # Read brightness and set a red static effect
+python3 thermal/test_led.py
 ```
 
-## Project layout
+ASUS LED test:
 
-- `main.py` - polling loop and signal handling
-- `thermal/controller.py` - CPU/GPU temperature readers and hysteresis state machine
-- `asus_led/controller.py` - `asusctl` brightness and Aura effect integration
-- `config.py` - polling, threshold, and color configuration
-- `thermal/test_state.py` - hardware-independent state-transition diagnostic
-- `thermal/test_led.py`, `asus_led/test.py` - hardware-facing diagnostics
+```bash
+python3 asus_led/test.py
+```
 
-## Limitations
+## Design
 
-- Temperature discovery is currently specific to `k10temp` and NVIDIA's
-	`nvidia-smi` output.
-- The process is intended to run in the foreground; no service unit is
-	provided in the tracked project files.
-- Sensor and command failures are logged, but there is no retry backoff or
-	persistent logging configuration.
+The controller separates **thermal sensing/state logic** from **hardware-specific LED control**. Hysteresis prevents rapid state switching near temperature boundaries, while failures in an individual sensor or LED operation do not terminate the main polling loop.
+
