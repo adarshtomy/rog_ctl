@@ -1,0 +1,21 @@
+[Unit]
+Description=ROG Thermal LED Controller
+After=graphical.target
+
+[Service]
+Type=simple
+
+User=adarsh
+Group=adarsh
+
+WorkingDirectory=/home/adarsh/projects/rog_ctl
+
+ExecStart=/usr/bin/python3 /home/adarsh/projects/rog_ctl/main.py
+
+Restart=always
+RestartSec=5
+
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=graphical.target
